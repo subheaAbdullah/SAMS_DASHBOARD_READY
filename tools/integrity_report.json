@@ -1,0 +1,164 @@
+{
+ "rows": 972,
+ "cols": 509,
+ "measures": 484,
+ "cells_A": 241,
+ "rows_A": 130,
+ "cells_B": 64,
+ "rows_B": 56,
+ "cells_C": 1741,
+ "rows_C": 657,
+ "total_cells": 2046,
+ "total_rows": 692,
+ "detail_A": [
+  [
+   "Consultations / Visits Male Total Male",
+   12,
+   -5838.0
+  ],
+  [
+   "Consultations / Visits Female Total Female",
+   17,
+   -7687.0
+  ],
+  [
+   "Uniqe Beneficiaries Male Total Male",
+   40,
+   -8713.0
+  ],
+  [
+   "Uniqe Beneficiaries Female Total Female",
+   38,
+   -13422.0
+  ],
+  [
+   "Number of outpatient Curative consultations Male Total Male",
+   1,
+   -100.0
+  ],
+  [
+   "Number of Hospitalizations Male Total Male",
+   1,
+   -106.0
+  ],
+  [
+   "Number of Hospitalizations Female Total Female",
+   2,
+   -81.0
+  ],
+  [
+   "Trauma consultations Male Total Male",
+   14,
+   38.0
+  ],
+  [
+   "Trauma consultations Female Total Female",
+   11,
+   160.0
+  ],
+  [
+   "Mental health consultations Male Total Male",
+   2,
+   -18.0
+  ],
+  [
+   "New Beneficiaries Male Total Male",
+   2,
+   67.0
+  ],
+  [
+   "Dental Beneficiaries Male Total Male",
+   37,
+   -2245.0
+  ],
+  [
+   "Dental Beneficiaries Female Total Female",
+   13,
+   -2095.0
+  ],
+  [
+   "Number of ICU patients received treatment Male Total Male",
+   34,
+   -2648.0
+  ],
+  [
+   "Number of ICU patients received treatment Female Total Female",
+   12,
+   -220.0
+  ],
+  [
+   "Oncology unit Beneficiaries Male Total Male",
+   1,
+   -1.0
+  ],
+  [
+   "Oncology unit Beneficiaries Female Total Female",
+   4,
+   -623.0
+  ]
+ ],
+ "detail_B": [
+  [
+   "Consultations / Visits Total",
+   3,
+   427.0
+  ],
+  [
+   "Uniqe Beneficiaries Total",
+   2,
+   426.0
+  ],
+  [
+   "Number of outpatient Curative consultations Total Total",
+   1,
+   1.0
+  ],
+  [
+   "Number of Hospitalizations Total Total",
+   3,
+   -732.0
+  ],
+  [
+   "Trauma consultations Total",
+   3,
+   -6.0
+  ],
+  [
+   "Mental health consultations Total Consult",
+   28,
+   -528.0
+  ],
+  [
+   "New Beneficiaries Total NEW Ben",
+   6,
+   -2198.0
+  ],
+  [
+   "Number of ICU patients received treatment Total",
+   12,
+   -82.0
+  ],
+  [
+   "Oncology unit Beneficiaries Total",
+   6,
+   1826.0
+  ]
+ ],
+ "detail_C": [
+  [
+   "CD indicators Total CD",
+   576,
+   390063.0
+  ],
+  [
+   "Morbidities Total Morbidities",
+   653,
+   107577.0
+  ],
+  [
+   "NCD Indicators Total NCD",
+   512,
+   7448.0
+  ]
+ ]
+}
