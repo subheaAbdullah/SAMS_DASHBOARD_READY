@@ -590,7 +590,6 @@ UI={
   "crm_count":"العدد",
   "crm_with_dates":"مع تاريخ حل",
   "crm_period":"الفترة الزمنية",
-  "crm_duration":"مدة الحل (أيام)",
   "crm_filter":"فلترة",
   "crm_filter_id":"رقم الشكوى (ID)",
   "crm_filter_id_ph":"مثال: 4543",
@@ -1000,7 +999,6 @@ UI={
   "crm_count":"Count",
   "crm_with_dates":"with resolution date",
   "crm_period":"Time period",
-  "crm_duration":"Resolution duration (days)",
   "crm_filter":"Filter",
   "crm_filter_id":"Complaint ID",
   "crm_filter_id_ph":"e.g. 4543",
@@ -1064,6 +1062,10 @@ def T(key):
     _d=UI.get(lang,{})
     if key in _d: return _d[key]
     return UI.get("en",{}).get(key, UI.get("ar",{}).get(key,key))
+
+def _L(ar,en):
+    """نص مباشر بلغتين بدون قاموس UI — للعناصر الجديدة (الدخول، الصفحة الرئيسية)."""
+    return ar if st.session_state.get("lang","en")=="ar" else en
 
 # =============================================================================
 # ===== أقسام «لوحة خدمات الصحة» =====
@@ -1570,9 +1572,15 @@ def render_data_source():
     d=None; _name=""; _kind="default"
     with st.expander(T("data_source"),expanded=ss.get("src_open",False)):
         # مفتاح الـ uploader يتغيّر مع src_ver عشان نقدر نرجّع الملف الافتراضي
-        up=st.file_uploader(T("src_upload"),type=["xlsx","xls","csv"],
-                            key=f"src_upload_{ss.get('src_ver',0)}",
-                            help=T("upload_help"))
+        # رفع ملف داتا جديد = تعديل على الداتا => للأدمن فقط (المشاهد بيشوف الملف الافتراضي)
+        if is_admin():
+            up=st.file_uploader(T("src_upload"),type=["xlsx","xls","csv"],
+                                key=f"src_upload_{ss.get('src_ver',0)}",
+                                help=T("upload_help"))
+        else:
+            up=None
+            st.caption(_L("وضع المشاهدة: الملف الافتراضي فقط — رفع ملفات الداتا للأدمن.",
+                          "Viewer mode: default data only — uploading data is admin-only."))
         if up is None:
             # ===== الملف الافتراضي =====
             d=load_base_data(DATA_FILE,DATA_SHEET)
@@ -1606,7 +1614,7 @@ def render_data_source():
                 st.error(f"{T('src_need_cols')}: {', '.join(_miss)}")
             else:
                 st.success(T("src_ok"))
-        if _kind=="upload" and st.button(f"🔄 {T('src_back_default')}",key="src_reset",use_container_width=True):
+        if _kind=="upload" and is_admin() and st.button(f"🔄 {T('src_back_default')}",key="src_reset",use_container_width=True):
             ss["src_ver"]=ss.get("src_ver",0)+1
             st.rerun()
     return d,_name,_kind
@@ -1627,6 +1635,77 @@ def _crm_grid(figs,per_row=6):
 
 _PIE_COLS=["#1d4ed8","#2563eb","#3b82f6","#60a5fa","#38bdf8","#7dd3fc","#0ea5e9","#93c5fd"]
 
+# ===== ألوان الجنس الموحّدة لكل الرسوم (التمييز باللون والرمز) =====
+# ذكر = أروق فاتح ♂ · أنثى = أحمر ♀ · غير محدّد/قيمة أخرى = رمادي ○
+SEX_M="#86efac"   # أروق فاتح — ذكور
+SEX_F="#ef4444"   # أحمر      — إناث
+SEX_O="#9ca3af"   # رمادي     — غير محدّد / أعمدة غير جنسية
+_SEX_M_AR=("ذكور","ذكر","صبيان","صبي","أولاد","ولاد","ذكور البالغين","ذكور الأطفال")
+_SEX_F_AR=("إناث","اناث","أنثى","أنثاء","انثى","بنات","بنت","نساء","إناث البالغات","إناث الأطفال")
+
+def sex_kind(x):
+    """'m' = ذكر · 'f' = أنثى · 'o' = غير محدّد أو قيمة أخرى.
+       كلمة «male» تظهر داخل «Female» أيضًا، لذلك الأنثى تُفحص أولًا
+       (نفس منطق _is_male_col / _is_female_col تحت، مع دعم العربي)."""
+    s=str(x).strip()
+    if not s: return "o"
+    for w in _SEX_F_AR:
+        if w in s: return "f"
+    for w in _SEX_M_AR:
+        if w in s: return "m"
+    if _is_female_col(s): return "f"
+    if _is_male_col(s): return "m"
+    return "o"
+
+def sex_color(x):
+    k=sex_kind(x)
+    return SEX_M if k=="m" else SEX_F if k=="f" else SEX_O
+
+def sex_colors(xs):
+    return [sex_color(x) for x in xs]
+
+def sex_sym(x):
+    k=sex_kind(x)
+    return "\u2642" if k=="m" else "\u2640" if k=="f" else "\u25cb"
+
+def sex_lab(x):
+    """اسم الفئة مع رمز الجنس — للشرائح المحدّدة جنسيًا فقط."""
+    k=sex_kind(x)
+    return (sex_sym(x)+" "+str(x)) if k in ("m","f") else str(x)
+
+def sex_ink(x):
+    """لون النص المناسب فوق لون الجنس: الأروق الفاتح يحتاج نصًا غامقًا."""
+    return "#0f1626" if sex_kind(x)=="m" else "#ffffff"
+
+def _sex_figs_html(counts):
+    """رسم الجنس بشكل أشخاص: ذكر (أزرق) / أنثى (وردي) / شخص رمادي للي ما له تصنيف."""
+    _m=_f=_u=0
+    for _k,_v in dict(counts).items():
+        _kind=sex_kind(_k)
+        try: _n=int(_v)
+        except Exception: _n=0
+        if _kind=="m": _m+=_n
+        elif _kind=="f": _f+=_n
+        else: _u+=_n
+    _tot=(_m+_f+_u) or 1
+    def _card(ic,lab,val,cls):
+        _p=val/_tot*100.0
+        return (f'<div class="sexf {cls}"><div class="sexf-ic">{ic}</div>'
+                f'<div class="sexf-v">{val:,}</div><div class="sexf-l">{lab}</div>'
+                f'<div class="sexf-bar"><i style="width:{_p:.1f}%"></i></div>'
+                f'<div class="sexf-p">{_p:.1f}%</div></div>')
+    return ('<div class="sexfwrap">'
+            +_card("👨",_L("ذكور","Male"),_m,"m")
+            +_card("👩",_L("إناث","Female"),_f,"f")
+            +_card("👤",_L("بدون تصنيف","Unspecified"),_u,"u")
+            +'</div>')
+
+def _cols_or(colors,n):
+    """ألوان مُمرّرة من البَرّ، وإلا تدرّج الأزرق الموحّد — يقبل أي عدد شرائح."""
+    _c=[str(c) for c in (colors or [])][:n]
+    while len(_c)<n: _c.append(_PIE_COLS[len(_c)%len(_PIE_COLS)])
+    return _c
+
 def _wrap(s,n=12):
     """يكسر النص الطويل لعدّة أسطر قصيرة حتى ما يصغّر الدونت."""
     _w=str(s).split(); _out=[]; _cur=""
@@ -1638,13 +1717,15 @@ def _wrap(s,n=12):
     if _cur: _out.append(_cur)
     return "<br>".join(_out) if _out else str(s)
 
-def _pie_go(labels,values,title,height=470):
-    """دونات كبيرة + سهم (leader line) لكل قطعة يبيّن الاسم والعدد."""
+def _pie_go(labels,values,title,height=470,colors=None):
+    """دونات كبيرة + سهم (leader line) لكل قطعة يبيّن الاسم والعدد.
+       colors=None => تدرّج الأزرق الافتراضي · وألوان الجنس تُمرَّر من بره."""
     import plotly.graph_objects as go
     _vals=[int(v) for v in values]; _tot=sum(_vals)
-    _txt=[f"{_wrap(k)}<br><b>{int(v):,}</b>" for k,v in zip(labels,values)]
-    _f=go.Figure(go.Pie(labels=[str(x) for x in labels],values=_vals,hole=.42,sort=False,
-        marker=dict(colors=[_PIE_COLS[i%len(_PIE_COLS)] for i in range(len(_vals))],
+    _lab=[sex_lab(k) for k in labels]                    # ♂ ذكر · ♀ أنثى
+    _txt=[f"{_wrap(k)}<br><b>{int(v):,}</b>" for k,v in zip(_lab,values)]
+    _f=go.Figure(go.Pie(labels=_lab,values=_vals,hole=.42,sort=False,
+        marker=dict(colors=_cols_or(colors,len(_vals)),
                     line=dict(color=DC_BG,width=2)),
         text=_txt,textinfo="text",textposition="outside",automargin=True,
         textfont=dict(color=DC_TXT,size=10.5),
@@ -1837,15 +1918,14 @@ def render_crm_dashboard(_df):
             _stop=_sv.value_counts()
             _f_status=_pie_go(_stop.index,_stop.values,T("crm_status"))
     _f_gender=None
-    _gen=None
+    _gen=None; _gtop=None
     for _c in _df.columns:
         if _c.strip().lower() in ("gender","sex"):
             _gen=_c; break
     if _gen is not None:
         _gv=_df[_gen].str.strip(); _gv=_gv[_gv!=""]
-        if 2<=_gv.nunique()<=6:
+        if len(_gv):
             _gtop=_gv.value_counts()
-            _f_gender=_pie_go(_gtop.index,_gtop.values,T("crm_gender"))
     _f_ctype=None
     _cty=None
     for _c in _df.columns:
@@ -1888,88 +1968,15 @@ def render_crm_dashboard(_df):
         _k=_c.strip().lower()
         if "complaint categor" in _k or _k in ("category","complaint classification","complaint type"):
             _cat=_c; break
-    _gall=None
-    if _sd and _ed:
-        _s=pd.to_datetime(_df[_sd],errors="coerce")
-        _e=pd.to_datetime(_df[_ed],errors="coerce")
-        _gall=pd.DataFrame({"id":_df[_did].astype(str),"s":_s,"e":_e})
-        if _prio is not None: _gall["p"]=_df[_prio].astype(str)
-        if _cat is not None: _gall["cat"]=_df[_cat].astype(str)
-        _gall=_gall[_gall["s"].notna()&_gall["e"].notna()&(_gall["e"]>=_gall["s"])].copy()
-        _gall["dur"]=(_gall["e"]-_gall["s"]).dt.days
-    if _f_chan is not None or _f_prio is not None or _f_status is not None or (_gall is not None and len(_gall)):
+    if _f_chan is not None or _f_prio is not None or _f_status is not None:
         _rhead("②","\U0001F4CA",T("crm_dash_distr_hdr"),BL_D2,"")
-    _crm_grid([_f for _f in [_f_chan,_f_prio,_f_status,_f_gender,_f_ctype,_f_cat]
+    _crm_grid([_f for _f in [_f_chan,_f_prio,_f_status,_f_ctype,_f_cat]
                if _f is not None])
-    if _gall is not None and len(_gall):
-        _g=_gall.copy().sort_values("s")
-        _mean=_g["dur"].mean() if len(_g) else 0.0
-        _tot=len(_df); _dated=len(_gall)
-        _ccap=f"{T('crm_count')}: {_tot:,}"
-        if _dated!=_tot: _ccap+=f"  ({_dated:,} {T('crm_with_dates')})"
-        _cm=st.columns(3,gap="small")
-        _cm[0].caption(f"{T('crm_avg')}: {_mean:.1f}d")
-        _cm[1].caption(_ccap)
-        if len(_g):
-            _cm[2].caption(f"{T('crm_period')}: {_g['s'].min().date()} \u2192 {_g['e'].max().date()}")
-        _plotted=False
-        if len(_g) and "cat" in _g.columns and _g["cat"].astype(str).str.strip().ne("").any():
-            _aa=_g.groupby("cat")["dur"].agg(["mean","count"]).reset_index()
-            if _cat is not None and _cat in _df.columns:
-                _cv=_df[_cat].astype(str).str.strip(); _cv=_cv[_cv!=""]
-                _tots=_cv.value_counts()
-                _aa["total"]=_aa["cat"].map(lambda c:int(_tots.get(str(c).strip(),0)))
-            else:
-                _aa["total"]=_aa["count"]
-            _aa=_aa.sort_values("mean")
-            if len(_aa):
-                import plotly.graph_objects as go
-                _fgg=go.Figure(go.Bar(
-                    y=[_abbrev(c) for c in _aa["cat"]],x=_aa["mean"],
-                    orientation="h",marker=dict(color=BL_M2),
-                    customdata=_aa[["cat","total","count"]].values,
-                    hovertemplate="<b>%{customdata[0]}</b><br>"+T("crm_count")+
-                                  ": %{customdata[1]}  (%{customdata[2]} "+T("crm_with_dates")+
-                                  ")<br>"+T("crm_avg")+": %{x:.1f} d<extra></extra>",
-                    text=[f"{v:.1f}d" for v in _aa["mean"]],textposition="outside",
-                    textfont=dict(color=DC_TXT,size=11)))
-                _fgg.update_layout(margin=dict(l=6,r=70,t=48,b=8),
-                    paper_bgcolor=DC_BG,plot_bgcolor=DC_BG,font=dict(color=DC_TXT,size=11),
-                    title=dict(text=T("crm_duration"),x=0.5,xanchor="center",automargin=True,
-                           font=dict(color=DC_TXT,size=15)),
-                    xaxis=dict(title=T("crm_days"),gridcolor="#ffffff22",zeroline=False),
-                    yaxis=dict(gridcolor="#ffffff11"),height=520,
-                    hoverlabel=dict(bgcolor=DC_CARD,font=dict(color=DC_TXT)))
-                st.plotly_chart(_fgg,use_container_width=True,
-                                config={"displayModeBar":False})
-                _plotted=True
-        if not _plotted and len(_g):
-            _gp=_g.head(40) if len(_g)>40 else _g
-            import matplotlib.dates as mdates
-            _fg,_ax=_dark_fig(PG_W,5.2)
-            _pmap={"High":"#0ea5e9","Normal":"#38bdf8","Low":"#b3e5fc"}
-            for _i,(_ix,_r) in enumerate(_gp.iterrows()):
-                _x0=mdates.date2num(_r["s"]); _x1=mdates.date2num(_r["e"])
-                _col=_pmap.get(_r.get("p","") if _prio is not None else "",BL_M2)
-                _ax.broken_barh([(_x0,max(_x1-_x0,0.5))],(_i-0.32,0.64),
-                                facecolors=_col,edgecolor=DC_BG,linewidth=0.6)
-                _ax.text(_x1,_i,f" {int(_r['dur'])}d",va="center",ha="left",
-                         color=DC_TXT,fontsize=6.2,fontweight="700")
-            _ax.set_yticks(list(range(len(_gp))))
-            if "cat" in _g.columns:
-                _yl=[_abbrev(c) for c in _gp["cat"].tolist()]
-            else:
-                _yl=[f"#{x}" for x in _gp["id"].tolist()]
-            _ax.set_yticklabels(_yl,fontsize=6.2)
-            _ax.xaxis_date()
-            _ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %y"))
-            _ax.tick_params(axis="x",labelsize=8)
-            _ax.set_ylim(-0.8,len(_gp)-0.2)
-            _ax.set_title(f"{T('crm_duration')} \u00b7 {T('crm_avg')} {_g['dur'].mean():.0f}d",
-                          fontsize=11)
-            try: plt.tight_layout()
-            except Exception: pass
-            st.pyplot(_fg,use_container_width=True); plt.close(_fg)
+    # ===== رسم الجنس بالأشخاص (ذكر/أنثى/رمادي للي ما له تصنيف) =====
+    # (حُذف الخط الزمني للمدة بناءً على طلب المستخدم — هذا الرسم بيحل محل دونات الجنس)
+    if _gtop is not None:
+        st.markdown(f'<div class="sect">👥 {T("crm_gender")}</div>',unsafe_allow_html=True)
+        st.markdown(_sex_figs_html(_gtop),unsafe_allow_html=True)
     _gcol=None
     for _c in _df.columns:
         if "govern" in _c.strip().lower():
@@ -1994,6 +2001,22 @@ def render_crm_dashboard(_df):
 
 # ===== CRM: صفحة جدول قابل للاختيار والتعديل والحفظ مع الوقت =====
 def render_crm():
+    # ===== وضع المشاهد أو فتح الداشبورد مباشرة: يعرض داشبورد CRM فقط (بدون أي تعديل) =====
+    _open=ss.pop("crm_open",None)
+    _cdf=_crm_ensure()
+    if _open=="dash" or not is_admin():
+        st.markdown('<div class="sect">🤝 CRM — Dashboard</div>',unsafe_allow_html=True)
+        if _cdf is None:
+            st.info(T("crm_empty"))
+        else:
+            render_crm_dashboard(_cdf)
+        if not is_admin():
+            st.caption(_L("وضع المشاهدة: بتقدر تفلتر وتشوف، بس التعديل على الداتا للأدمن فقط.",
+                          "Viewer mode: you can filter and view; data editing is admin-only."))
+        if st.button("⬅ "+_L("رجوع للرئيسية","Back to home"),key="crm_back_home",
+                     use_container_width=True):
+            ss["view"]="home"; st.rerun()
+        return
     st.markdown('<div class="sect">🤝 CRM</div>',unsafe_allow_html=True)
     st.caption(T("crm_hint"))
     if "crm_ver" not in ss: ss["crm_ver"]=0
@@ -2128,6 +2151,10 @@ def render_crm():
                                    key="crm_dl",use_container_width=True)
             except Exception:
                 pass
+    st.markdown("<br>",unsafe_allow_html=True)
+    if st.button("⬅ "+_L("رجوع للرئيسية","Back to home"),key="crm_back_home2",
+                 use_container_width=True):
+        ss["view"]="home"; st.rerun()
 
 # ===== تصنيف المنشآت بنوعها (مشافي / مراكز صحة / MC / مراكز متخصصة ...) =====
 # الترتيب مهم: أول قاعدة بتتطابق هي يلي بتطبّق.
@@ -2307,9 +2334,13 @@ def _hhs_has_data(df,key):
     _cols_with=int((_n.fillna(0).sum(axis=0)>0).sum())
     return _cols_with,len(cols)
 
-def render_health_services(fdata,alldata):
+def render_health_services(fdata,alldata,embedded=False):
     # ===== لوحة الخدمات الصحية: كروت موحّدة الشكل مع مؤشر حالة (بنمط Power BI) =====
-    st.markdown(f'<div class="ibox"><div class="ibox-head"><span class="ibox-title">🏥 {T("hhs_title")}</span></div>',unsafe_allow_html=True)
+    # embedded=True يعني إنها معروضة داخل الصفحة الرئيسية (بدون صندوق/زر رجوع).
+    if embedded:
+        st.markdown(f'<div class="sectband">🏥 {T("hhs_title")}<span class="sb-sub">{_L("الخدمات الصحية","Health Services")}</span></div>',unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="ibox"><div class="ibox-head"><span class="ibox-title">🏥 {T("hhs_title")}</span></div>',unsafe_allow_html=True)
     _sn=ss.get("_srcname") or ""
     st.caption(f"{T('data_source')}: **{_sn}**" if _sn else T("hhs_sub"))
     _cur=ss.get("_hhs_key")
@@ -2347,9 +2378,10 @@ def render_health_services(fdata,alldata):
         st.markdown("<br>",unsafe_allow_html=True)
     st.markdown("<br>",unsafe_allow_html=True)
     st.caption(T("pick_a_button"))
-    # زر الرجوع للرئيسية
-    if st.button(f"⬅ {T('btn_back')}",key="hhs_back",use_container_width=True):
-        ss["view"]="wall"; st.rerun()
+    # زر الرجوع للرئيسية (يظهر بس لما الصفحة تكون مستقلة)
+    if not embedded:
+        if st.button(f"⬅ {T('btn_back')}",key="hhs_back",use_container_width=True):
+            ss["view"]="home"; st.rerun()
 
 # ===== ألوان الداشبورد (نفس هوية التطبيق) =====
 DC_BG="#151f38"; DC_CARD="#1c2846"; DC_EDGE="#2b3f66"; DC_TXT="#e6edf7"; DC_MUT="#8aa0c0"
@@ -2608,7 +2640,9 @@ def _donut_fig(data,colors,center_lab,hole=.42,explode=.05,tsize=30,w=None,lfont
             fontsize=tsize,fontweight="900",transform=ax.transData)
     ax.text(0,-0.34,f"{_tot:,.0f}",ha="center",va="center",color=DC_MUT,
             fontsize=int(tsize*0.63),fontweight="700",transform=ax.transData)
-    _nm=[(n[:lmax-1]+"…" if lmax and len(str(n))>lmax else n) for n,v in data]
+    # أسماء الشرائح في المفتاح: مع رمز الجنس ♂/♀ للفئات المحدّدة جنسيًا فقط
+    _nm=[sex_lab(n) if sex_kind(n) in ("m","f") else str(n) for n,v in data]
+    _nm=[(n[:lmax-1]+"…" if lmax and len(str(n))>lmax else n) for n in _nm]
     lg=[f"{n}    {v:,.0f}    ({v/_tot*100:.1f}%)" for n,(_,v) in zip(_nm,data)]
     if key_below:
         # المفتاح تحت الدائرة: نختار عدد الأعمدة حسب طول النص حتى ما يقص
@@ -2684,7 +2718,7 @@ def render_dash_page(fdata,alldata):
     top=st.columns([1,2.4])
     with top[0]:
         if st.button(f"⬅ {T('btn_back_sections')}",key="dash_back",use_container_width=True):
-            ss["view"]="hhs"; st.rerun()
+            ss["view"]="home"; st.rerun()
     with top[1]:
         _all=[(k,T(k)) for _,_,_,items in SECTIONS for k,_ in items]
         _labs=[n for _,n in _all]; _keys=[k for k,_ in _all]
@@ -2697,10 +2731,10 @@ def render_dash_page(fdata,alldata):
     b1,b2=st.columns(2)
     with b1:
         if st.button(f"⬅ {T('btn_back_sections')}",key="dash_back2",use_container_width=True):
-            ss["view"]="hhs"; st.rerun()
+            ss["view"]="home"; st.rerun()
     with b2:
         if st.button(f"🏠 {T('btn_home')}",key="dash_home",use_container_width=True):
-            ss["view"]="wall"; st.rerun()
+            ss["view"]="home"; st.rerun()
 
 def render_hhs_dashboard(fdata,alldata):
     # ===== داشبورد الزر المختار: لكل زر داشبورد مخصص، وإلا الداشبورد العام =====
@@ -2760,7 +2794,7 @@ def dash_g_cb(fdata,alldata):
         for sex,tk,cls,vcls in (("Male",T("lbl_boys"),"boyrow","bv"),("Female",T("lbl_girls"),"girlrow","gv")):
             vals=[S(f"{base} {sex} {a}") for a,_ in AGES]
             st_=S(f"{base} {sex} Total {sex}")   # مرجعي: عمود Total الرسمي
-            h.append(f'<tr class="{cls}"><th class="sex">{tk}</th>')
+            h.append(f'<tr class="{cls}"><th class="sex">{sex_lab(tk)}</th>')
             for v in vals:
                 h.append(f'<td class="{vcls}"><div class="v">{fmt(v)}</div>'
                          f'<div class="a">{pct(v,st_) if st_ else "\u2014"}</div></td>')
@@ -2791,9 +2825,9 @@ def dash_g_cb(fdata,alldata):
     _c1,_c2,_c3=st.columns(3,gap="medium")
     with _c1:
         st.markdown(f'<div class="ct">{T("ch_gender")}</div>',unsafe_allow_html=True)
-        _show(_donut_fig([(T("pwd_men"),S("Men")),(T("pwd_women"),S("Women")),
-                          (T("lbl_boys"),S("Boys")),(T("lbl_girls"),S("Girls"))],
-                         [BL_NW[0],BL_M2,BL_D2,BL_D],T("grand_total"),
+        _gsex=[(T("pwd_men"),S("Men")),(T("pwd_women"),S("Women")),
+               (T("lbl_boys"),S("Boys")),(T("lbl_girls"),S("Girls"))]
+        _show(_donut_fig(_gsex,sex_colors([n for n,_ in _gsex]),T("grand_total"),
                          w=TILE_W,tsize=DP_TSIZE,lfont=DP_LFONT,key_below=DP_KEYBELOW,lmax=DP_LMAX))
     with _c2:
         st.markdown(f'<div class="ct">{T("ch_host_idp")}</div>',unsafe_allow_html=True)
@@ -2802,9 +2836,9 @@ def dash_g_cb(fdata,alldata):
                          w=TILE_W,tsize=DP_TSIZE,lfont=DP_LFONT,key_below=DP_KEYBELOW,lmax=DP_LMAX,explode=.08))
     with _c3:
         st.markdown(f'<div class="ct">{T("bx_pwd")}</div>',unsafe_allow_html=True)
-        _show(_donut_fig([(T("pwd_boys"),_pw[0]),(T("pwd_men"),_pw[1]),
-                          (T("pwd_girls"),_pw[2]),(T("pwd_women"),_pw[3])],
-                         [BL_NW[0],BL_M2,BL_D2,BL_D],T("grand_total"),
+        _pwsx=[(T("pwd_boys"),_pw[0]),(T("pwd_men"),_pw[1]),
+               (T("pwd_girls"),_pw[2]),(T("pwd_women"),_pw[3])]
+        _show(_donut_fig(_pwsx,sex_colors([n for n,_ in _pwsx]),T("grand_total"),
                          w=TILE_W,tsize=DP_TSIZE,lfont=DP_LFONT,key_below=DP_KEYBELOW,lmax=DP_LMAX))
     # ===== ⑤ بتر الأطراف: قسمان — رقمان فقط =====
     _lo=S("Disabilities Lower limb amputations"); _up=S("Disabilities Upper limb amputation")
@@ -2933,15 +2967,16 @@ def dash_g_sg(fdata,alldata):
             (T("sg_19_49"),["War related Male 19-49 years","War related Female 19-49 years"]),
             (T("sg_50p"),["War related Male 50+ years","War related Female 50+ years"])]
     _age=[(n,sum(S(c) for c in cs)) for n,cs in _bands]
-    # الفئات: غير حربية = درجات فاتحة، حربية = درجات غامقة
-    _bars=[(f'{T("sg_nowar")} \u00b7 {T("sg_male")}',S("Non War Men"),BL_NW[0]),
-           (f'{T("sg_nowar")} \u00b7 {T("sg_female")}',S("Non-War Women"),BL_NW[1]),
-           (f'{T("sg_nowar")} \u00b7 {T("sg_boys")}',S("Non -War boys"),BL_NW[2]),
-           (f'{T("sg_nowar")} \u00b7 {T("sg_girls")}',S("Non-War girls"),BL_NW[3]),
-           (f'{T("sg_war")} \u00b7 {T("sg_male")}',S("War Men"),BL_W[0]),
-           (f'{T("sg_war")} \u00b7 {T("sg_female")}',S("War Women"),BL_W[1]),
-           (f'{T("sg_war")} \u00b7 {T("sg_boys")}',S("War boys"),BL_W[2]),
-           (f'{T("sg_war")} \u00b7 {T("sg_girls")}',S("War girls"),BL_W[3])]
+    # الفئات: لون الجنس يحكم — ذكور = أروق فاتح · إناث = أحمر (والأعمدة غير الجنسية رمادي)
+    _bars=[(f'{T("sg_nowar")} \u00b7 {T("sg_male")}',S("Non War Men")),
+           (f'{T("sg_nowar")} \u00b7 {T("sg_female")}',S("Non-War Women")),
+           (f'{T("sg_nowar")} \u00b7 {T("sg_boys")}',S("Non -War boys")),
+           (f'{T("sg_nowar")} \u00b7 {T("sg_girls")}',S("Non-War girls")),
+           (f'{T("sg_war")} \u00b7 {T("sg_male")}',S("War Men")),
+           (f'{T("sg_war")} \u00b7 {T("sg_female")}',S("War Women")),
+           (f'{T("sg_war")} \u00b7 {T("sg_boys")}',S("War boys")),
+           (f'{T("sg_war")} \u00b7 {T("sg_girls")}',S("War girls"))]
+    _bars=[(n,v,sex_color(n)) for n,v in _bars]
     _mt=max([v for _,v,_ in _bars]+[1])
     def mhead(n,icon,title,color,note=""):
         # نفس مكوّن العناوين المستعمل بكل الداشبوردات => هوية بصرية موحّدة
@@ -3061,8 +3096,8 @@ def dash_g_de(fdata,alldata):
               fmt(_ben),BL_M,f'{T("rows_label")}: {len(fdata):,}'),
              ("\U0001F4CA",T("de_consultations"),fmt(_con),BL_M2,pct(_con,_ben)),
              ("\U0001FA7A",T("de_procedures"),fmt(_pro),BL_L,pct(_pro,_ben)),
-             ("\u2694\uFE0F",T("de_male"),fmt(_mal),BL_D,pct(_mal,_ben)),
-             ("\u2695\uFE0F",T("de_female"),fmt(_fem),BL_D2,pct(_fem,_ben))])
+             ("\u2642\uFE0F",T("de_male"),fmt(_mal),SEX_M,pct(_mal,_ben)),
+             ("\u2640\uFE0F",T("de_female"),fmt(_fem),SEX_F,pct(_fem,_ben))])
     # ===== الفئات العمرية (٥ فئات) =====
     _bands=[(T("sg_under5"),"<5 years"),(T("sg_5_14"),"5-14 years"),
             (T("sg_15_18"),"15-18 years"),(T("sg_19_49"),"19-49 years"),
@@ -3100,7 +3135,7 @@ def dash_g_de(fdata,alldata):
             fig,ax=_dark_fig(TILE_W,TILE_H)
             wdg,texts=ax.pie([v for _,v in _parts],labels=None,startangle=90,
                              counterclock=False,radius=1.0,
-                             colors=[BL_NW[0],BL_W[2]][:len(_parts)],
+                             colors=[sex_color(n) for n,_ in _parts],
                              wedgeprops=dict(edgecolor=DC_BG,linewidth=DP_LW))
             ax.set_xlim(-1.06,1.06); ax.set_ylim(-1.06,1.06)
             ax.set_box_aspect(1)                       # دائرة مثالية مو ممدودة
@@ -3131,9 +3166,9 @@ def dash_g_de(fdata,alldata):
         _mv=[v for _,m_,f_ in _age for v in (m_,f_)]
         _pk=max(_mv+[1.0])
         ax.bar([i-_w/2 for i in _x],[m_ for _,m_,_ in _age],width=_w,
-               color=BL_NW[0],alpha=.95,label=T("de_male"))
+               color=SEX_M,alpha=.95,label=sex_lab(T("de_male")))
         ax.bar([i+_w/2 for i in _x],[f_ for _,_,f_ in _age],width=_w,
-               color=BL_W[2],alpha=.95,label=T("de_female"))
+               color=SEX_F,alpha=.95,label=sex_lab(T("de_female")))
         ax.set_xticks(_x)
         ax.set_xticklabels([_lbl(n,14) for n,_,_ in _age],rotation=28,ha="right",fontsize=DP_FS_SM)
         ax.yaxis.set_major_formatter(FuncFormatter(lambda v,_: f"{v/1000:,.0f}k" if v>=1000 else f"{v:,.0f}"))
@@ -3187,8 +3222,9 @@ def dash_g_de(fdata,alldata):
 
 # ===== تدرّجات زرقاء للفنات العمرية: كل لون = عمر وجنس واحد =====
 # الذكور أغمق شوي من الإناث، مع إنو كلهم أزرق (هوية الداشبورد)
-_TR_MALE=["#1e3a8a","#1d4ed8","#2563eb","#3b82f6","#60a5fa"]
-_TR_FEM =["#0369a1","#0ea5e9","#38bdf8","#7dd3fc","#b3e5fc"]
+# ألوان الفئات العمرية حسب الجنس: ذكور = تدرّج أروق فاتح · إناث = تدرّج أحمر
+_TR_MALE=["#22c55e","#4ade80","#86efac","#a7f3d0","#bbf7d0"]
+_TR_FEM =["#dc2626","#ef4444","#f87171","#fca5a5","#fecaca"]
 # تدرّج أزرق بتباين واضح بين كل خطوة والتانية (بعيد كل ما يختلط)
 BL_DIST=["#e0f2fe","#93c5fd","#4f9dfb","#1d7fe0","#2b5fd9","#1e40af","#16237d","#0d1550"]
 # لون متباعد للمقطع رقم i: خطوتان بالتدرّج حتى ما يتشابهوا مع بعض
@@ -3412,19 +3448,19 @@ def dash_g_chw(fdata,alldata):
         st.markdown('<div class="mbox">'
                     +mhead("\u2460","\U0001F3E0",T("chw_hh"),BL_M,T("chw_hhben"))+'</div>',
                     unsafe_allow_html=True)
-        dcard(T("chw_reach4"),_setA,[BL_NW[0],BL_M2,BL_D2,BL_D])
+        dcard(T("chw_reach4"),_setA,sex_colors([n for n,_ in _setA]))
     with _a2:
         st.markdown('<div class="mbox">'
                     +mhead("\u2461","\U0001F37C",T("chw_iycf"),BL_D2,fmt(_iycf))+'</div>',
                     unsafe_allow_html=True)
-        dcard(T("chw_iycf4"),_setB,[BL_L,BL_M,BL_M2,BL_D])
+        dcard(T("chw_iycf4"),_setB,sex_colors([n for n,_ in _setB]))
     with _a3:
         st.markdown('<div class="mbox">'
                     +mhead("\u2462","\U0001F9CA",T("chw_screen"),BL_D,T("chw_cu5n")+" "+fmt(_cu5))+'</div>',
                     unsafe_allow_html=True)
         dcard(T("chw_screen"),
               [(T("chw_cu5m"),_cu5m),(T("chw_cu5f"),_cu5f),(T("chw_plws"),_plws)],
-              [BL_M,BL_D2,BL_NW[1]])
+              sex_colors([T("chw_cu5m"),T("chw_cu5f"),T("chw_plws")]))
     # ══════════ ④ التحويلات  ⑤ SAM/MAM  ⑥ نسبة الحالات ══════════
     _rhead("\u2463","\U0001F4E8",T("chw_ref")+" \u00b7 "+T("chw_sammam")+" \u00b7 "+T("chw_case_ratio"),
            BL_D,f'{T("chw_ref")} {fmt(_ref)} \u00b7 {T("s_sam")} {fmt(_sam)} \u00b7 {T("s_mam")} {fmt(_mam)}')
@@ -3627,10 +3663,10 @@ def dash_g_rf(fdata,alldata):
             _rects=_tree_rects([v for _,v in _gc])
             for (_x,_y,_w,_h,_i) in _rects:
                 ax.add_patch(mpatches.Rectangle((_x,_y),_w,_h,
-                             facecolor=_dist_color(_i),edgecolor=DC_BG,
+                             facecolor=sex_color(_gc[_i][0]),edgecolor=DC_BG,
                              linewidth=DP_LW,alpha=.96))
-                ax.text(_x+_w/2,_y+_h/2,f'{_gc[_i][0]}\n{fmt(_gc[_i][1])}\n{_gc[_i][1]/_gct*100:.1f}%',
-                        ha="center",va="center",color="#ffffff",fontsize=DP_FS,
+                ax.text(_x+_w/2,_y+_h/2,f'{sex_lab(_gc[_i][0])}\n{fmt(_gc[_i][1])}\n{_gc[_i][1]/_gct*100:.1f}%',
+                        ha="center",va="center",color=sex_ink(_gc[_i][0]),fontsize=DP_FS,
                         fontweight="700",linespacing=1.5)
             ax.set_facecolor(DC_BG); fig.patch.set_facecolor(DC_BG)
             fig.subplots_adjust(left=0,right=1,top=1,bottom=0)
@@ -3840,10 +3876,10 @@ def dash_g_gi(fdata,alldata):
             ax.set_xlim(0,1); ax.set_ylim(0,1)
             ax.set_xticks([]); ax.set_yticks([])
             for (_x,_y,_w,_h,_i) in _tree_rects([v for _,v in _gc]):
-                ax.add_patch(mpatches.Rectangle((_x,_y),_w,_h,facecolor=_dist_color(_i),
+                ax.add_patch(mpatches.Rectangle((_x,_y),_w,_h,facecolor=sex_color(_gc[_i][0]),
                              edgecolor=DC_BG,linewidth=DP_LW,alpha=.96))
-                ax.text(_x+_w/2,_y+_h/2,f'{_gc[_i][0]}\n{fmt(_gc[_i][1])}\n{_gc[_i][1]/_gct*100:.1f}%',
-                        ha="center",va="center",color="#ffffff",fontsize=DP_FS,
+                ax.text(_x+_w/2,_y+_h/2,f'{sex_lab(_gc[_i][0])}\n{fmt(_gc[_i][1])}\n{_gc[_i][1]/_gct*100:.1f}%',
+                        ha="center",va="center",color=sex_ink(_gc[_i][0]),fontsize=DP_FS,
                         fontweight="700",linespacing=1.45)
             ax.set_facecolor(DC_BG); fig.patch.set_facecolor(DC_BG)
             fig.subplots_adjust(left=0,right=1,top=1,bottom=0)
@@ -3992,8 +4028,8 @@ def dash_g_ho(fdata,alldata):
                     +mhead("\u2461","\U0001F535",T("ho_gender_split"),BL_D2,fmt(_hos))
                     +'</div>',unsafe_allow_html=True)
         _parts=[]
-        if _hm>0: _parts.append((T("tr_male"),_hm,BL_D))
-        if _hf>0: _parts.append((T("tr_female"),_hf,BL_L))
+        if _hm>0: _parts.append((T("tr_male"),_hm,SEX_M))
+        if _hf>0: _parts.append((T("tr_female"),_hf,SEX_F))
         if not _parts:
             st.info(T("no_values"))
         else:
@@ -4218,7 +4254,7 @@ def dash_g_rh(fdata,alldata):
     with _e2:
         dcard(T("rh_pnc_n"),[(T("rh_boys"),S("PNCs newborns within 3 days after delivery Male")),
                              (T("lbl_girls"),S("PNCs newborns within 3 days after delivery Female"))],
-              [BL_M,BL_D2])
+              sex_colors([T("rh_boys"),T("lbl_girls")]))
     with _e3:
         dcard(T("rh_fp"),[(T("o18"),S("RH Family Planning 18>")),
                           (T("u18"),S("RH Family Planning 18<"))],[BL_NW[1],BL_D])
@@ -4623,10 +4659,9 @@ def maybe_resume():
             st.session_state["indicators"]=d.get("indicators") or []
             st.session_state["grant"]=d.get("grant")
             st.session_state["phase"]=d.get("phase") or ("dashboard" if d.get("grant") else "setup")
-            st.session_state["view"]=st.session_state["phase"]
+            # ملاحظة: ما منغيّر «view» هون — أول واجهة دائمًا الصفحة الرئيسية (home).
         if d.get("draft"):
             st.session_state["phase"]="setup"
-            st.session_state["view"]="form"
             return
     except Exception as e:
         st.session_state["_resumed"]=True
@@ -4740,8 +4775,42 @@ h1{color:#00d4ff!important}h3{color:#e6edf7!important}
 .ibx-rows b{color:#e6edf7}
 .sect{display:flex;align-items:center;gap:10px;color:#00d4ff;font-size:19px;font-weight:800;margin:22px 0 12px}
 .sect::after{content:"";flex:1;height:2px;background:linear-gradient(90deg,#00d4ff,#23324f)}
+/* ===== شريط عنوان القسم: مستطيل واضح يبيّن إنه هون بلّش قسم جديد ===== */
+.sectband{display:flex;align-items:center;gap:10px;margin:26px 0 14px;padding:11px 16px;
+  border-radius:14px;border:1px solid #23324f;border-left:4px solid #00d4ff;
+  background:linear-gradient(90deg,rgba(0,212,255,.16) 0%,rgba(124,92,255,.10) 45%,rgba(20,30,54,.30) 100%);
+  color:#e6edf7;font-size:19px;font-weight:900;letter-spacing:.2px;
+  box-shadow:0 4px 16px rgba(0,0,0,.25)}
+.sectband .sb-sub{color:#8aa0c0;font-size:11px;font-weight:800;letter-spacing:1.4px;
+  margin-left:auto;text-transform:uppercase}
+/* ===== ترويسة الصفحة الرئيسية ===== */
+.pagehead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  padding:14px 18px;margin:2px 0 8px;border-radius:16px;border:1px solid #23324f;
+  background:linear-gradient(90deg,rgba(0,212,255,.10),rgba(124,92,255,.08))}
+.pagehead .ph-t{color:#e6edf7;font-size:26px;font-weight:900;letter-spacing:.3px;line-height:1.2}
+.pagehead .ph-s{color:#00d4ff;font-size:14px;font-weight:800;margin-top:3px}
+.pagehead .ph-b{color:#8aa0c0;font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase}
 .wallcard{background:linear-gradient(180deg,#182341,#141e36);border:1px solid #23324f;border-radius:18px;padding:16px;margin-bottom:8px;box-shadow:0 6px 22px rgba(0,0,0,.3);transition:transform .15s ease}
 .wallcard:hover{transform:translateY(-2px);border-color:#2b3f66}
+/* ===== بطاقة الحساب بالسايدبار ===== */
+.accbox{display:flex;gap:10px;align-items:flex-start;background:linear-gradient(180deg,#182341,#141e36);
+  border:1px solid #23324f;border-radius:14px;padding:10px 12px;margin:6px 0 10px}
+.acc-ic{font-size:22px;line-height:1}
+.acc-meta{min-width:0}
+.acc-name{color:#e6edf7;font-size:13.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acc-mail{color:#8aa0c0;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px}
+/* ===== رسم الجنس: أشخاص (ذكر/أنثى/رمادي للي ما له تصنيف) ===== */
+.sexfwrap{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:4px 0 14px}
+.sexf{background:linear-gradient(180deg,#182341,#141e36);border:1px solid #23324f;border-top:3px solid #23324f;
+  border-radius:16px;padding:14px 10px;text-align:center;box-shadow:0 4px 18px rgba(0,0,0,.28)}
+.sexf.m{border-top-color:#38bdf8}.sexf.f{border-top-color:#f472b6}.sexf.u{border-top-color:#64748b}
+.sexf-ic{font-size:34px;line-height:1.1}
+.sexf-v{font-size:30px;font-weight:900;color:#e6edf7;margin-top:2px;letter-spacing:-.5px}
+.sexf-l{color:#8aa0c0;font-size:12.5px;font-weight:800}
+.sexf-bar{height:6px;background:#1d2c4f;border-radius:6px;margin:8px 0 4px;overflow:hidden}
+.sexf-bar i{display:block;height:100%;border-radius:6px}
+.sexf.m .sexf-bar i{background:#38bdf8}.sexf.f .sexf-bar i{background:#f472b6}.sexf.u .sexf-bar i{background:#64748b}
+.sexf-p{color:#8aa0c0;font-size:11.5px;font-weight:700}
 .whead{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .wtitle{color:#00d4ff;font-size:17px;font-weight:800}
 .wdate{color:#8aa0c0;font-size:11px}
@@ -4807,9 +4876,9 @@ h1{color:#00d4ff!important}h3{color:#e6edf7!important}
 .agrid td{background:linear-gradient(180deg,#1c2846,#161f3a);border:1px solid #23324f;border-radius:10px;padding:9px 6px;text-align:center}
 .agrid td .a{color:#8aa0c0;font-size:10.5px}
 .agrid td .v{font-size:18px;font-weight:900;margin-top:2px}
-.agrid td.bv{color:#38bdf8}.agrid td.gv{color:#f472b6}
- .agrid tr.boyrow td{border-left:3px solid #38bdf8}
- .agrid tr.girlrow td{border-left:3px solid #f472b6}
+.agrid td.bv{color:#86efac}.agrid td.gv{color:#ef4444}
+ .agrid tr.boyrow td{border-left:3px solid #86efac}
+ .agrid tr.girlrow td{border-left:3px solid #ef4444}
  .agrid th.totcol{color:#e6edf7;font-size:12.5px}
  .agrid td.totcol{background:linear-gradient(180deg,#243252,#1a2542);border:1px solid #3a4d73}
  .agrid td.totcol .v{color:#e6edf7;font-size:19px;font-weight:900}
@@ -5089,9 +5158,9 @@ def make_agesplit_fig(df,target=None,title=None,use_improved=False,period_label=
     n=len(labels)
     w=0.36
     idx=list(range(n))
-    # عمود ذكور (أزرق) وعمود إناث (برتقالي/وردي) متجاوران لكل فئة عمرية
-    ax.bar([i-w/2 for i in idx],mv,width=w,color=COLS[0],alpha=0.92,label="ذكور",zorder=3)
-    ax.bar([i+w/2 for i in idx],fv,width=w,color=COLS[2],alpha=0.92,label="إناث",zorder=3)
+    # عمود ذكور (أروق فاتح) وعمود إناث (أحمر) متجاوران لكل فئة عمرية
+    ax.bar([i-w/2 for i in idx],mv,width=w,color=SEX_M,alpha=0.92,label=sex_lab("ذكور"),zorder=3)
+    ax.bar([i+w/2 for i in idx],fv,width=w,color=SEX_F,alpha=0.92,label=sex_lab("إناث"),zorder=3)
     # الأرقام فوق كل عمود
     for i,(a_,b_) in enumerate(zip(mv,fv)):
         if a_: ax.text(i-w/2,a_,f"{a_:,.0f}",ha="center",va="bottom",color="#e6edf7",fontsize=FS_VALUE-2,zorder=4)
@@ -5793,28 +5862,333 @@ def kpis_html(labels,vals,icons):
     h.append('</div>')
     return "".join(h)
 
+# =============================================================================
+# ===== الصفحة الرئيسية الموحّدة: Grant + Health Services Dashboard + CRM =====
+# كل شي صار بصفحة واحدة (بنفس ترتيب وتنسيق لوحة خدمات الصحة)، وأزرار التنقّل
+# انشالت من السايدبار. الأزرار الحسّاسة (New Grant / Edit / حذف) للأدمن فقط.
+# =============================================================================
+def _crm_ensure():
+    """يحمّل أول جدول CRM مرة واحدة بالجلسة إذا ما في جدول محمّل."""
+    if st.session_state.get("crm_df") is None:
+        _n=_crm_names()
+        if _n:
+            _d=_crm_load(_n[0])
+            if _d is not None:
+                st.session_state["crm_df"]=_d
+                st.session_state["crm_name_cur"]=_n[0]
+                st.session_state["crm_pick_loaded"]=_n[0]
+    return st.session_state.get("crm_df")
+
+@st.cache_data(show_spinner=False)
+def _saves_meta(key):
+    """ميتاداتا المنح المحفوظة (بدون تحميل البيكل الضخم كل مرة) — الكاش يتبدّل بتغيّر الملفات."""
+    out=[]
+    for p,d in list_saves():
+        g=d.get("grant") or {}
+        ind=d.get("indicators") or []
+        tot=don=0
+        try:
+            for x in ind:
+                _d=x.get("df"); _p=x.get("pdf")
+                if _p is None: _p=x.get("fdf")
+                if _d is not None: tot+=len(_d)
+                if _p is not None: don+=len(_p)
+        except Exception:
+            tot=0; don=0
+        pct=(don/tot*100.0) if tot else None
+        try: mb=os.path.getsize(p)/1048576.0
+        except Exception: mb=0.0
+        out.append({"path":p,"name":(g.get("name") or os.path.splitext(os.path.basename(p))[0]),
+                    "saved":str(d.get("saved_at",""))[:16],"services":g.get("services",0),
+                    "beneficiaries":g.get("beneficiaries",0),"n_ind":len(ind),
+                    "pct":pct,"mb":mb})
+    return out
+
+def _saves_key():
+    _k=[]
+    for p in glob.glob(os.path.join(SAVES_DIR,"*.pkl")):
+        if os.path.basename(p).startswith("_"): continue
+        try: _k.append((os.path.basename(p),round(os.path.getmtime(p),3)))
+        except Exception: pass
+    return tuple(sorted(_k))
+
+def render_grant_cards():
+    """كروت المنح المحفوظة بنفس شكل كروت لوحة خدمات الصحة (٤ أعمدة)."""
+    _metas=_saves_meta(_saves_key())
+    if not _metas:
+        st.markdown(f'<div class="hintbox">📁 {_L("ما في منح محفوظة بعد — اضغط New Grant لإنشاء أول منحة.","No saved grants yet — press New Grant to create your first one.")}</div>',
+                    unsafe_allow_html=True)
+        return
+    for _i in range(0,len(_metas),4):
+        _row=_metas[_i:_i+4]
+        _cols=st.columns(4,gap="small")
+        for _j,_m in enumerate(_row):
+            _bn=safe_name(os.path.basename(_m["path"]))
+            with _cols[_j]:
+                with st.container(border=True):
+                    _pct="—" if _m["pct"] is None else f'{_m["pct"]:.1f}%'
+                    _pv=_m["pct"] or 0.0
+                    st.markdown(f'''<div class="hhs-meta"><span class="hm-ic">📊</span>
+<span class="hhs-badge custom">{T("ach_ratio")} {_pct}</span>
+<span class="hhs-dot has"><i></i>{_m["n_ind"]} {T("n_ind")}</span></div>
+<div class="wtitle" style="margin-bottom:2px">{_m["name"]}</div>
+<div class="wdate">📅 {_m["saved"]} · {_m["mb"]:.1f} MB</div>
+<div class="wrows" style="margin-top:6px">{_L("الخدمات","Services")}: <b>{fmt(_m["services"],True)}</b>
+ · {_L("المستفيدون","Beneficiaries")}: <b>{fmt(_m["beneficiaries"],True)}</b></div>
+<div class="wbar"><div style="width:{min(100,_pv):.1f}%"></div></div>''',unsafe_allow_html=True)
+                    if st.button("📂 "+_L("فتح","Open"),key="gopen_"+_bn,
+                                 use_container_width=True,type="primary"):
+                        try:
+                            _d=load_save(_m["path"])
+                        except Exception:
+                            _d=None
+                        if _d:
+                            ss["grant"]=_d.get("grant") or {}
+                            ss["indicators"]=_d.get("indicators") or []
+                            ss["phase"]="dashboard"; ss["view"]="dashboard"
+                            ss["_draft"]={}
+                        st.rerun()
+                    if is_admin():
+                        if st.button("🗑 "+_L("حذف","Delete"),key="gdel_"+_bn,
+                                     use_container_width=True):
+                            try: os.remove(_m["path"])
+                            except Exception: pass
+                            _saves_meta.clear(); st.rerun()
+
+# ===== CRM: كروت الجداول المحفوظة (نفس فكرة كروت المنح) =====
+def _crm_meta_all(key=None):
+    """ميتاداتا جداول CRM (اسم/صفوف/أعمدة/آخر تحديث) — الكاش بيتبدّل بتغيّر الملفات."""
+    out=[]
+    for _n in _crm_names():
+        _p=_crm_path(_n); _rows=0; _cols=0; _mt=""
+        try:
+            _d=pd.read_csv(_p,dtype=str,encoding="utf-8-sig"); _rows=len(_d); _cols=len(_d.columns)
+        except Exception:
+            pass
+        try: _mt=datetime.datetime.fromtimestamp(os.path.getmtime(_p)).strftime("%Y-%m-%d %H:%M")
+        except Exception: pass
+        out.append({"name":_n,"rows":_rows,"cols":_cols,"mt":_mt})
+    return out
+
+def _crm_key():
+    _k=[]
+    for _n in _crm_names():
+        _p=_crm_path(_n)
+        try: _k.append((os.path.basename(_p),round(os.path.getmtime(_p),3)))
+        except Exception: pass
+    return tuple(sorted(_k))
+
+def _crm_open_table(n,dash=True):
+    """يفتح جدول CRM: داشبورد فقط (dash=True) أو شاشة التعديل (dash=False)."""
+    _d=_crm_load(n)
+    ss["crm_df"]=_d; ss["crm_name_cur"]=n; ss["crm_pick_loaded"]=n
+    ss.pop("crm_seg",None); ss.pop("crm_rad",None)
+    if dash: ss["crm_open"]="dash"
+    ss["view"]="crm"; st.rerun()
+
+def render_crm_cards():
+    """كروت جداول CRM بنفس شكل كروت المنح — الداشبورد ما بيظهر إلا بعد الضغط."""
+    _metas=_crm_meta_all(_crm_key())
+    if not _metas:
+        st.markdown(f'<div class="hintbox">🤝 {_L("ما في جدول CRM محفوظ بعد.","No saved CRM table yet.")}</div>',
+                    unsafe_allow_html=True)
+        return
+    for _i in range(0,len(_metas),4):
+        _row=_metas[_i:_i+4]
+        _cols=st.columns(4,gap="small")
+        for _j,_m in enumerate(_row):
+            _bn=safe_name(_m["name"])
+            with _cols[_j]:
+                with st.container(border=True):
+                    st.markdown(f'''<div class="hhs-meta"><span class="hm-ic">🤝</span>
+<span class="hhs-badge custom">{_L("صفوف","Rows")} {fmt(_m["rows"],True)}</span>
+<span class="hhs-dot has"><i></i>{_m["cols"]} {_L("عمود","Columns")}</span></div>
+<div class="wtitle" style="margin-bottom:2px">{_m["name"]}</div>
+<div class="wdate">📅 {_m["mt"]}</div>''',unsafe_allow_html=True)
+                    if st.button("📊 "+_L("فتح الداشبورد","Open dashboard"),key="crmdash_"+_bn,
+                                 use_container_width=True,type="primary"):
+                        _crm_open_table(_m["name"],True)
+                    if is_admin():
+                        if st.button("✏️ "+_L("تعديل الداتا","Edit data"),key="crmedit_"+_bn,
+                                     use_container_width=True):
+                            _crm_open_table(_m["name"],False)
+
+def render_home(fdata,alldata):
+    """الصفحة الرئيسية: Main Dashboard ← Grant + Health Services Dashboard + CRM."""
+    # ===== العنوان الرئيسي (تحت شعار سامز) =====
+    st.markdown('<div class="pagehead"><div><div class="ph-t">Main Dashboard</div>'
+                f'<div class="ph-s">{_L("لوحة المتابعة الرئيسية","Grants · Health Services · CRM overview")}</div></div>'
+                '<div class="ph-b">SAMS · Grant · Health Services · CRM</div></div>',
+                unsafe_allow_html=True)
+    # ===== ① عنوان Grant + زر New Grant بنهاية نفس السطر =====
+    _h1,_h2=st.columns([6,1.45],vertical_alignment="center")
+    with _h1:
+        st.markdown(f'<div class="sectband" style="margin:22px 0 8px">📁 {_L("المنح","Grant")}'
+                    f'<span class="sb-sub">{_L("المنح المحفوظة","Saved Grants")}</span></div>',
+                    unsafe_allow_html=True)
+    with _h2:
+        st.markdown('<div style="height:12px"></div>',unsafe_allow_html=True)
+        if is_admin():
+            if st.button("➕ New Grant",key="home_newgrant",use_container_width=True,type="primary"):
+                clear_auto()
+                ss["grant"]={}; ss["indicators"]=[]; ss["_draft"]={}
+                ss["phase"]="setup"; ss["view"]="form"; ss["gname"]=""
+                st.rerun()
+        else:
+            st.caption(_L("عرض فقط","View only"))
+    render_grant_cards()
+    # ===== ② Health Services Dashboard + تفاصيله =====
+    render_health_services(fdata,alldata,embedded=True)
+    # ===== ③ CRM: عنوان + كروت (الداشبورد ما بيظهر هون — بينفتح بالضغط على الكرت) =====
+    st.markdown(f'<div class="sectband">🤝 CRM<span class="sb-sub">{_L("الشكاوى","Complaints")}</span></div>',
+                unsafe_allow_html=True)
+    render_crm_cards()
+
+# =============================================================================
+# ===== تسجيل الدخول والصلاحيات (Viewer / Admin) =====
+# - حساب الأدمن ثابت: SAMSAD / lifesave — كل الصلاحيات (تعديل الداتا والواجهات).
+# - أي مستخدم عادي: يسجّل إيميله وكلمة مروره مرة واحدة، بينحفظوا في users.json،
+#   وبعدها بيفوت بنفس الإيميل. صلاحيته: يشوف الواجهات ويفلتر بس ما يعدّل أي داتا.
+# =============================================================================
+USERS_FILE=os.path.join(os.path.dirname(os.path.abspath(__file__)),"users.json")
+ADMIN_USER="SAMSAD"
+ADMIN_PASS="lifesave"
+
+def _pw_hash(pw,salt=""):
+    """تشفير كلمة المرور (SHA-256 + salt) — ما بنخزّن كلمة المرور نصّ صريح."""
+    return hashlib.sha256((str(salt)+str(pw)).encode("utf-8")).hexdigest()
+
+def _users_load():
+    try:
+        if os.path.isfile(USERS_FILE):
+            with io.open(USERS_FILE,encoding="utf-8") as _f:
+                _d=json.load(_f)
+            if isinstance(_d,dict): return _d
+    except Exception:
+        pass
+    return {}
+
+def _users_save(d):
+    try:
+        with io.open(USERS_FILE,"w",encoding="utf-8") as _f:
+            json.dump(d,_f,ensure_ascii=False,indent=2)
+        return True
+    except Exception:
+        return False
+
+def current_user():
+    return st.session_state.get("auth") or {}
+
+def is_admin():
+    return (st.session_state.get("auth") or {}).get("role")=="admin"
+
+def _login_page():
+    """شاشة الدخول/التسجيل — أول شي بيشوفه المستخدم قبل أي داتا."""
+    st.markdown('''<style>
+    .authwrap{display:flex;justify-content:center;margin-top:6px}
+    .authcard{background:linear-gradient(180deg,#182341,#141e36);border:1px solid #23324f;
+      border-radius:20px;padding:18px 20px 14px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
+    .authtitle{font-size:21px;font-weight:900;color:#00d4ff;text-align:center;margin-bottom:8px}
+    .authnote{color:#8aa0c0;font-size:12px;text-align:center;margin-top:10px;line-height:1.6}
+    </style>''',unsafe_allow_html=True)
+    _org_header()
+    _c0,_c1,_c2=st.columns([1,1.25,1])
+    with _c1:
+        _lng=ss.get("lang","en")
+        _ll,_lr=st.columns(2)
+        with _lr:
+            if st.button(("🌐 English" if _lng=="ar" else "🌐 العربية"),key="lg_lang",
+                         use_container_width=True):
+                ss["lang"]="en" if _lng=="ar" else "ar"; st.rerun()
+        st.markdown('<div class="authwrap"><div style="width:100%">',unsafe_allow_html=True)
+        st.markdown(f'<div class="authtitle">🔐 {_L("تسجيل الدخول","Sign in")}</div>',unsafe_allow_html=True)
+        _tab_in,_tab_up=st.tabs([_L("دخول","Login"),
+                                 _L("حساب جديد","Create account")])
+        with _tab_in:
+            with st.form("sams_login",clear_on_submit=False):
+                _em=st.text_input(_L("الإيميل أو اسم المستخدم","Email or username"),key="lg_email")
+                _pw=st.text_input(_L("كلمة المرور","Password"),type="password",key="lg_pw")
+                _go=st.form_submit_button(_L("دخول","Sign in"),use_container_width=True,type="primary")
+            if _go:
+                _em=(_em or "").strip()
+                if not _em or not _pw:
+                    st.error(_L("رجاءً أدخل الإيميل وكلمة المرور.","Please enter your email and password."))
+                elif _em.lower()==ADMIN_USER.lower() and _pw==ADMIN_PASS:
+                    ss["auth"]={"email":ADMIN_USER,"name":ADMIN_USER,"role":"admin"}
+                    ss["view"]="home"; st.rerun()
+                else:
+                    _u=_users_load().get(_em.lower())
+                    if _u and _u.get("pw")==_pw_hash(_pw,_u.get("salt","")):
+                        ss["auth"]={"email":_em.lower(),
+                                    "name":_u.get("name") or _em,
+                                    "role":"viewer"}
+                        ss["view"]="home"; st.rerun()
+                    else:
+                        st.error(_L("الإيميل أو كلمة المرور غير صحيحة.","Wrong email or password."))
+        with _tab_up:
+            with st.form("sams_register",clear_on_submit=False):
+                _rn=st.text_input(_L("الاسم (اختياري)","Name (optional)"),key="rg_name")
+                _re=st.text_input(_L("الإيميل","Email"),key="rg_email")
+                _rp=st.text_input(_L("كلمة المرور","Password"),type="password",key="rg_pw")
+                _rp2=st.text_input(_L("تأكيد كلمة المرور","Confirm password"),type="password",key="rg_pw2")
+                _rg=st.form_submit_button(_L("إنشاء الحساب","Create account"),use_container_width=True)
+            if _rg:
+                _re=(_re or "").strip().lower()
+                if "@" not in _re or "." not in _re.split("@")[-1]:
+                    st.error(_L("أدخل إيميل صحيح.","Enter a valid email."))
+                elif len(_rp or "")<4:
+                    st.error(_L("كلمة المرور لازم ٤ أحرف على الأقل.","Password must be at least 4 characters."))
+                elif _rp!=_rp2:
+                    st.error(_L("كلمتا المرور غير متطابقتين.","Passwords do not match."))
+                elif _re==ADMIN_USER.lower():
+                    st.error(_L("هذا الاسم محجوز لحساب الأدمن.","This username is reserved for the admin."))
+                else:
+                    _d=_users_load()
+                    if _re in _d:
+                        st.error(_L("هذا الإيميل مسجّل مسبقًا — سجّل دخول.","This email already exists — please sign in."))
+                    else:
+                        _salt=os.urandom(8).hex()
+                        _d[_re]={"name":(_rn or "").strip() or _re.split("@")[0],
+                                 "pw":_pw_hash(_rp,_salt),"salt":_salt,
+                                 "role":"viewer","created":datetime.datetime.now().isoformat(timespec="seconds")}
+                        if _users_save(_d):
+                            ss["auth"]={"email":_re,"name":_d[_re]["name"],"role":"viewer"}
+                            ss["view"]="home"; st.rerun()
+                        else:
+                            st.error(_L("تعذّر حفظ الحساب — تأكّد من صلاحيات المجلد.","Could not save the account."))
+        st.markdown('</div></div>',unsafe_allow_html=True)
+        st.markdown(f'<div class="authnote">{_L("الحساب العادي بيشوف الواجهات ويعمل فلترة بس ما بيعدّل الداتا.","Regular accounts can view and filter data but cannot edit it.")}</div>',
+                    unsafe_allow_html=True)
+
 # ===== تهيئة الجلسة =====
 # مهم: maybe_resume يُستدعى قبل setdefault الافتراضية حتى يعمل فحص «grant ليس None»
 # (الجلسة الجديدة لا تملك grant أصلاً، فأي مسودة/dashboard محفوظ يُستأنف من _auto.pkl)
 ss=st.session_state
+ss.setdefault("lang","en")
+
+# شاشة الافتتاح: مرة واحدة لكل جلسة (قبل الدخول)
+if not ss.get("splash_shown"):
+    ss["splash_shown"]=True
+    components.html('''<div id="spl"><h1>SAMS</h1><div class="splabel">لوحة متابعة المشاريع الإنسانية</div><div class="spn"></div></div>''',height=0)
+
+# ===== بوابة الدخول: بدون تسجيل دخول ما بنعرض ولا بنحمّل أي داتا =====
+if not ss.get("auth"):
+    _auto_tr_flush()
+    _login_page()
+    st.stop()
+
 maybe_resume()
 ss.setdefault("phase","setup")
-ss.setdefault("view","wall")
+ss.setdefault("view","home")
 ss.setdefault("grant",{})
 ss.setdefault("indicators",[])
 ss.setdefault("splash_shown",False)
 ss.setdefault("_draft",{})
 
-if not ss.get("splash_shown"):
-    # تشغيل شاشة الافتتاح مرة واحدة فقط لكل جلسة
-    ss["splash_shown"]=True
-    components.html('''<div id="spl"><h1>SAMS</h1><div class="splabel">لوحة متابعة المشاريع الإنسانية</div><div class="spn"></div></div>''',height=0)
-
-# ===== الشريط الجانبي (اللوحة المنسدلة): تبديل اللغة + الزرّان الرئيسيان =====
-# زر واحد في كل الصفحات: الضغط يقلب نص الموقع كله، ويبقى محفوظًا أثناء الجلسة.
-# الزرّان «لوحة خدمات الصحة» و«منحة جديدة» موجودين هنا مع زر اللغة بنفس اللوحة.
+# ===== الشريط الجانبي =====
+# بعد نقل كل الأزرار للصفحة الرئيسية، صار السايدبار فيه بس:
+# تبديل اللغة + بيانات الحساب والخروج + مصدر الداتا والفلاتر (الفلترة مسموحة للجميع).
 with st.sidebar:
-    # زر اللغة (اللوحة المنسدلة): الترجمة التلقائية + تبديل اللغة
     _auto_tr_flush()
     _lang_now=ss.get("lang","en")
     st.markdown('<div class="sect" style="margin-top:0">🌐 Language</div>',unsafe_allow_html=True)
@@ -5822,38 +6196,43 @@ with st.sidebar:
         ss["lang"]="en" if _lang_now=="ar" else "ar"
         st.rerun()
     st.caption("English" if _lang_now=="ar" else "العربية")
+    # ===== بيانات الحساب + الخروج =====
+    _u=current_user()
+    _role_lbl=_L("أدمن — كل الصلاحيات","Admin — full access") if is_admin() else _L("مشاهد — عرض وفلترة","Viewer — view & filter")
+    _role_cls="custom" if is_admin() else "generic"
+    st.markdown(f'''<div class="accbox">
+      <div class="acc-ic">{'🛡️' if is_admin() else '👤'}</div>
+      <div class="acc-meta"><div class="acc-name">{_u.get('name') or _u.get('email') or ''}</div>
+      <div class="acc-mail">{_u.get('email') or ''}</div>
+      <span class="hhs-badge {_role_cls}">{_role_lbl}</span></div></div>''',unsafe_allow_html=True)
+    if st.button("🚪 "+_L("تسجيل الخروج","Sign out"),key="logout_btn",
+                 use_container_width=True):
+        ss.pop("auth",None)
+        for _k in ("crm_df","crm_name_cur","crm_pick_loaded","crm_seg","_crm_loaded"):
+            ss.pop(_k,None)
+        st.rerun()
     st.markdown("<br>",unsafe_allow_html=True)
-    # زر «لوحة خدمات الصحة»
-    if st.button(T("btn_hhs"),key="sb_hhs",use_container_width=True,type="primary"):
-        ss["view"]="hhs"
-        st.rerun()
-    # زر «الرئيسية» تحت زر لوحة خدمات الصحة مباشرة — رجوع لجدار المنح
-    if st.button(T("btn_home"),key="sb_home",use_container_width=True):
-        ss["view"]="wall"
-        st.rerun()
-    # زر «منحة جديدة»: تصفير الحالة وفتح شاشة الإعداد
-    if st.button(T("btn_new_grant"),key="sb_newgrant",use_container_width=True):
-        clear_auto()
-        ss["grant"]={}
-        ss["indicators"]=[]
-        ss["_draft"]={}
-        ss["phase"]="setup"
-        ss["view"]="form"
-        ss["gname"]=""
-        st.rerun()
-    # زر «CRM» تحت زر المنحة الجديدة: قاعدة بيانات مستقلة قابلة للاختيار والتعديل والحفظ
-    if st.button(T("btn_crm"),key="sb_crm",use_container_width=True):
-        ss["view"]="crm"
-        st.rerun()
-    # ===== مصدر الداتا + الفلاتر الستة: بصفحتي الأقسام والداشبورد =====
-    if ss.get("view") in ("hhs","dash"):
-        st.markdown("<br>",unsafe_allow_html=True)
+    # ===== مصدر الداتا + الفلاتر: بالصفحة الرئيسية والأقسام والداشبورد =====
+    if ss.get("view") in ("home","hhs","dash"):
         _src,_srcname,_srckind=render_data_source()
         _fdata,_alldata=render_global_filters(_src)
         ss["_fdata"]=_fdata; ss["_alldata"]=_alldata; ss["_srcname"]=_srcname
 
 # ===== ترويسة المنظمة: أعلى كل صفحة (جدار المنح، الأقسام، الداشبورد، المنحة، الإعداد) =====
 _org_header()
+
+# ===== حماية الصلاحيات: شاشات إنشاء/إعداد المنحة للأدمن فقط =====
+if not is_admin() and ss.get("view") in ("form","setup"):
+    ss["view"]="home"; st.rerun()
+# أي جلسة قديمة على «wall» تنتقل للصفحة الرئيسية الجديدة
+if ss.get("view")=="wall":
+    ss["view"]="home"; st.rerun()
+
+# ===== الصفحة الرئيسية الموحّدة (Grant + Health Services + CRM) =====
+if ss.get("view")=="home":
+    if _fdata is None or _alldata is None:
+        st.error(T("src_bad")); st.stop()
+    render_home(_fdata,_alldata)
 
 # ===== واجهة الأقسام (23 زر) =====
 if ss.get("view")=="hhs":
@@ -6294,7 +6673,7 @@ if ss.get("view")=="form" or ss.get("view")=="setup":
     # أزرار الإجراء: العودة للجدار / إنهاء الإعداد والانتقال إلى اللوحة / حفظ المسودة فقط
     cB1,cB2,cB3=st.columns(3)
     if cB1.button(T("btn_home2"),use_container_width=True):
-        ss["view"]="wall"; ss["phase"]="setup"; st.rerun()
+        ss["view"]="home"; ss["phase"]="setup"; st.rerun()
     if cB2.button("اتم — الانتقال إلى اللوحة",use_container_width=True):
         ss["grant"]={"name":st.session_state.get("gname",""),"services":int(st.session_state.get("gserv",0) or 0),"beneficiaries":int(st.session_state.get("gben",0) or 0),"start":start_dt,"end":end_dt}
         ss["_draft"]={}
@@ -6335,17 +6714,21 @@ if ss.get("view")=="dashboard":
     '''
             st.markdown(md_html(tl),unsafe_allow_html=True)
         except Exception: pass
-    # شريط العنوان والأزرار: العودة للإعداد / حفظ المشروع / الذهاب إلى الجدار
-    top=st.columns([3,1,1,1])
+    # شريط العنوان والأزرار: العودة للإعداد / حفظ المشروع / الذهاب للرئيسية (الأزرار للأدمن فقط)
+    top=st.columns([3,1,1,1]) if is_admin() else st.columns([3,1])
     with top[0]: st.title(f"SAMS — {g.get('name','بدون اسم')}")
-    with top[1]:
-        if st.button(T("btn_edit"),use_container_width=True):
-            ss["phase"]="setup"; ss["view"]="form"; st.rerun()
-    with top[2]:
-        if st.button(T("btn_save"),use_container_width=True):
-            p=save_dashboard(); st.success("تم الحفظ داخل الموقع: "+os.path.basename(p))
-    with top[3]:
-        if st.button(T("btn_home2"),use_container_width=True): ss["view"]="wall"; st.rerun()
+    if is_admin():
+        with top[1]:
+            if st.button(T("btn_edit"),use_container_width=True):
+                ss["phase"]="setup"; ss["view"]="form"; st.rerun()
+        with top[2]:
+            if st.button(T("btn_save"),use_container_width=True):
+                p=save_dashboard(); st.success("تم الحفظ داخل الموقع: "+os.path.basename(p))
+        with top[3]:
+            if st.button(T("btn_home2"),use_container_width=True): ss["view"]="home"; st.rerun()
+    else:
+        with top[1]:
+            if st.button(T("btn_home2"),use_container_width=True): ss["view"]="home"; st.rerun()
     # بطاقات الإحصاء العامة: الاسم / الخدمات / المستفيدون / عدد المؤشرات
     c1,c2,c3,c4=st.columns(4)
     with c1: st.markdown('<div class="stat"><small>اسم المنحة</small><b style="font-size:15px;color:#e6edf7">'+str(g.get("name","-"))+'</b></div>',unsafe_allow_html=True)
