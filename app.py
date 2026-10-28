@@ -17,6 +17,8 @@ import matplotlib.patches as mpatches
 from matplotlib.ticker import FuncFormatter, MaxNLocator
 import statistics as stt
 import streamlit.components.v1 as components
+# وحدة MEAL: التخزين الخاص + الإنجاز الشهري + التقارير PDF/Word + إدارة المستخدمين
+import sams_meal as meal
 
 # إعداد صفحة التطبيق: العنوان، عرض عريض، وإخفاء الشريط الجانبي افتراضيًا
 st.set_page_config(page_title="SAMS - Grant Monitoring",layout="wide",initial_sidebar_state="collapsed")
@@ -1118,7 +1120,12 @@ SECTIONS=[
 # الملف صار جوّه مجلد المشروع (SAMS DASHBOARD) حتى يكون كل شيء بمكان واحد
 # ومحمول: يشتغل من أي جهاز بدون أي مسار خاص بالمستخدم.
 _APP_DIR=os.path.dirname(os.path.abspath(__file__))
-DATA_FILE=os.path.join(_APP_DIR,"Basic and Final Update june 2026.xlsx")
+# ===== التخزين الخاص: البيانات الحسّاسة داخل .sams_private/ (مستثنى من Git) =====
+# الأولوية: ملف الأدمن المحفوظ محلياً ← الملف الافتراضي بجذر المشروع.
+# الملف الافتراضي أيضاً مستثنى في .gitignore، فلا تُرفع أي بيانات على GitHub.
+_PRIV_DIR=meal.PRIVATE_DIR
+_PRIV_DATA=meal.DATA_PRIVATE
+DATA_FILE=_PRIV_DATA if os.path.exists(_PRIV_DATA) else os.path.join(_APP_DIR,"Basic and Final Update june 2026.xlsx")
 if not os.path.exists(DATA_FILE):   # احتياط: أول ملف xlsx جوّه المجلد (غير جداول CRM)
     for _f in sorted(os.listdir(_APP_DIR)):
         if _f.lower().endswith((".xlsx",".xls")) and "crm" not in _f.lower():
@@ -1552,15 +1559,20 @@ def _group_of(col):
         if col.endswith(b): return col[:-len(b)].strip()
     return col.strip()
 
-def _match_cols(df,key):
-    # كل الأعمدة الخاصة بزر معيّن (لا الأبعاد ولا التاريخ ولا Project ID ولا Community)
+# ===== كاش خفيف لأعمدة كل زر: يوفّر آلاف المقارنات في كل إعادة رسم =====
+@st.cache_data(show_spinner=False)
+def _match_cols_cached(cols,key):
     pats=BTN_COLS.get(key) or []
     skip=set(DIMS6)|{"Project ID","Community"}
     out=[]
-    for c in df.columns:
+    for c in cols:
         if c in skip: continue
         if any(c==p or c.startswith(p) for p in pats): out.append(c)
-    return out
+    return tuple(out)
+
+def _match_cols(df,key):
+    # كل الأعمدة الخاصة بزر معيّن (لا الأبعاد ولا التاريخ ولا Project ID ولا Community)
+    return list(_match_cols_cached(tuple(map(str,df.columns)),key))
 
 def _num(d,cols):
     # تحويل أعمدة القياس إلى أرقام (الملف فيه أعمدة نصية/فارغة) — يرجع DataFrame بنفس الشكل
@@ -1583,6 +1595,10 @@ def render_data_source():
                           "Viewer mode: default data only — uploading data is admin-only."))
         if up is None:
             # ===== الملف الافتراضي =====
+            if not os.path.isfile(DATA_FILE):
+                st.warning(_L("لا توجد قاعدة بيانات محفوظة بعد — ارفع ملف Excel من الأعلى (للأدمن) ليبدأ العرض.",
+                              "No saved database yet — upload an Excel file above (admin) to start."))
+                return None,"",""
             d=load_base_data(DATA_FILE,DATA_SHEET)
             _name=os.path.basename(DATA_FILE); _kind="default"
             st.caption(f"📌 {T('src_default')}: **{_name}** — {T('src_sheet')}: `{DATA_SHEET}`")
@@ -1606,6 +1622,18 @@ def render_data_source():
                 st.error(f"{T('src_bad')}: {e}"); return None,"",""
             _name=_fn; _kind="upload"
             st.success(f"✅ {T('src_active')}: **{_name}**"+(f" — {T('src_sheet')}: `{_sheet}`" if _sheet else ""))
+            # حفظ نسخة دائمة من الملف داخل التخزين الخاص (خارج Git)
+            if is_admin():
+                if st.button("💾 "+_L("حفظ للاستخدام الدائم","Save permanently"),
+                             key="src_persist",use_container_width=True):
+                    try:
+                        with open(meal.DATA_PRIVATE,"wb") as _pf:
+                            _pf.write(_blob)
+                        load_base_data.clear()
+                        st.success(_L("تم الحفظ في .sams_private/data.xlsx","Saved to .sams_private/data.xlsx"))
+                        st.rerun()
+                    except Exception as _e:
+                        st.error(f"{T('src_bad')}: {_e}")
         # ===== تحقق: الأبعاد الستة لازم موجودة وإلا الفلاتر ما رح تشتغل =====
         if d is not None:
             _miss=[c for c in DIMS6 if c not in d.columns]
@@ -2201,6 +2229,30 @@ def _fac_kind(name):
                 return k
     return "other"
 
+# ===== بصمة خفيفة للداتا (تسمح بالكاش بدون تجزئة 509 عمود في كل رسم) =====
+_SIG_MEMO={}
+def _df_sig(df):
+    # نتذكر البصمة حسب هوية الـ DataFrame نفسه: تُحسب مرة واحدة في كل rerun
+    # بدل حسابها 30 مرة (مرة لكل كارت/رسم).
+    try:
+        _hit=_SIG_MEMO.get(id(df))
+        if _hit is not None and _hit[0] is df:
+            return _hit[1]
+    except Exception:
+        pass
+    try:
+        h=hashlib.md5(pd.util.hash_pandas_object(df,index=False).values.tobytes()).hexdigest()[:12]
+        sig=(len(df),len(df.columns),h)
+    except Exception:
+        sig=(len(df),len(getattr(df,"columns",[])))
+    try:
+        if len(_SIG_MEMO)>8: _SIG_MEMO.clear()
+        _SIG_MEMO[id(df)]=(df,sig)
+    except Exception:
+        pass
+    return sig
+
+@st.cache_data(show_spinner=False,hash_funcs={pd.DataFrame:_df_sig})
 def _fac_kind_counts(df,col="Facility Name"):
     """عدد المنشآت الفريدة لكل نوع، مرتّبة بشكل مفهوم."""
     if df is None or len(df)==0 or col not in df.columns: return [],0
@@ -2326,8 +2378,9 @@ def render_global_filters(d):
         render_fac_kind_panel(f,_ktot)
     return f,d
 
+@st.cache_data(show_spinner=False,hash_funcs={pd.DataFrame:_df_sig})
 def _hhs_has_data(df,key):
-    # هل للوحدة داتا فعلاً؟ نفحص كل أعمدتها: إذا كلها صفر/فارغة => ماكو داتا
+    # هل للوحدة داتا فعلاً؟ نفحص كل أعمدةها: إذا كلها صفر/فارغة => ماكو داتا
     cols=_match_cols(df,key)
     if not cols: return 0,0
     _n=df[cols].apply(pd.to_numeric,errors="coerce")
@@ -6039,7 +6092,12 @@ def render_home(fdata,alldata):
     render_grant_cards()
     # ===== ② Health Services Dashboard + تفاصيله =====
     render_health_services(fdata,alldata,embedded=True)
-    # ===== ③ CRM: عنوان + كروت (الداشبورد ما بيظهر هون — بينفتح بالضغط على الكرت) =====
+    # ===== ③ متابعة المشاريع (MEAL): الإنجاز الشهري + التقارير + الصلاحيات =====
+    st.markdown(f'<div class="sectband">📊 {_L("متابعة المشاريع (MEAL)","Projects Follow-up (MEAL)")}'
+                f'<span class="sb-sub">{_L("الإنجاز الشهري · التقارير · الصلاحيات","Monthly actuals · Reports · Permissions")}</span></div>',
+                unsafe_allow_html=True)
+    meal.render_meal_section(fdata,alldata,lang=ss.get("lang","ar"),admin=is_admin())
+    # ===== ④ CRM: عنوان + كروت (الداشبورد ما بيظهر هون — بينفتح بالضغط على الكرت) =====
     st.markdown(f'<div class="sectband">🤝 CRM<span class="sb-sub">{_L("الشكاوى","Complaints")}</span></div>',
                 unsafe_allow_html=True)
     render_crm_cards()
@@ -6050,7 +6108,7 @@ def render_home(fdata,alldata):
 # - أي مستخدم عادي: يسجّل إيميله وكلمة مروره مرة واحدة، بينحفظوا في users.json،
 #   وبعدها بيفوت بنفس الإيميل. صلاحيته: يشوف الواجهات ويفلتر بس ما يعدّل أي داتا.
 # =============================================================================
-USERS_FILE=os.path.join(os.path.dirname(os.path.abspath(__file__)),"users.json")
+USERS_FILE=meal.USERS_FILE   # .sams_private/users.json — مستثنى من Git
 ADMIN_USER="SAMSAD"
 ADMIN_PASS="lifesave"
 
@@ -6059,22 +6117,11 @@ def _pw_hash(pw,salt=""):
     return hashlib.sha256((str(salt)+str(pw)).encode("utf-8")).hexdigest()
 
 def _users_load():
-    try:
-        if os.path.isfile(USERS_FILE):
-            with io.open(USERS_FILE,encoding="utf-8") as _f:
-                _d=json.load(_f)
-            if isinstance(_d,dict): return _d
-    except Exception:
-        pass
-    return {}
+    # كل الحسابات بملف خاص خارج Git (مع ترحيل users.json القديم تلقائياً)
+    return meal.load_users()
 
 def _users_save(d):
-    try:
-        with io.open(USERS_FILE,"w",encoding="utf-8") as _f:
-            json.dump(d,_f,ensure_ascii=False,indent=2)
-        return True
-    except Exception:
-        return False
+    return meal.save_users(d)
 
 def current_user():
     return st.session_state.get("auth") or {}
@@ -6121,7 +6168,7 @@ def _login_page():
                     if _u and _u.get("pw")==_pw_hash(_pw,_u.get("salt","")):
                         ss["auth"]={"email":_em.lower(),
                                     "name":_u.get("name") or _em,
-                                    "role":"viewer"}
+                                    "role":(_u.get("role") or "viewer")}
                         ss["view"]="home"; st.rerun()
                     else:
                         st.error(_L("الإيميل أو كلمة المرور غير صحيحة.","Wrong email or password."))
@@ -6157,7 +6204,8 @@ def _login_page():
                         else:
                             st.error(_L("تعذّر حفظ الحساب — تأكّد من صلاحيات المجلد.","Could not save the account."))
         st.markdown('</div></div>',unsafe_allow_html=True)
-        st.markdown(f'<div class="authnote">{_L("الحساب العادي بيشوف الواجهات ويعمل فلترة بس ما بيعدّل الداتا.","Regular accounts can view and filter data but cannot edit it.")}</div>',
+        st.markdown(f'<div class="authnote">{_L("الحساب العادي بيشوف الواجهات ويعمل فلترة بس ما بيعدّل الداتا.","Regular accounts can view and filter data but cannot edit it.")}<br>'
+                    f'{_L("🔒 البيانات تُخزَّن محلياً داخل .sams_private ولا تُرفع على GitHub.","🔒 Data is stored locally in .sams_private and is never pushed to GitHub.")}</div>',
                     unsafe_allow_html=True)
 
 # ===== تهيئة الجلسة =====

@@ -5,3 +5,8 @@ matplotlib>=3.7
 plotly>=5.18
 openpyxl
 requests
+# تصدير التقارير PDF و Word
+reportlab>=4.0
+arabic-reshaper>=3.0
+python-bidi>=0.4
+python-docx>=1.1
